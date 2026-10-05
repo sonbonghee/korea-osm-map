@@ -1,0 +1,78 @@
+services:
+  korea-tile-builder:
+    image: openmaptiles/planetiler-openmaptiles:3.16
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx16g
+    command:
+      - --force
+      - --download
+      - --osm_url=https://download.geofabrik.de/asia/south-korea-latest.osm.pbf
+      - --osm_path=/data/south-korea-latest.osm.pbf
+      - --output=/data/korea.mbtiles
+      - --maxzoom=14
+      - --building-merge-z13=false
+    volumes:
+      - type: volume
+        source: korea-map-data
+        target: /data
+    restart: "no"
+
+  map-style-init:
+    image: alpine:3.22
+    depends_on:
+      korea-tile-builder:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        apk add --no-cache ca-certificates jq unzip wget
+        mkdir -p /data/styles /data/fonts /data/sprites
+        wget -qO /tmp/osm-bright.json https://raw.githubusercontent.com/openmaptiles/osm-bright-gl-style/master/style.json
+        jq '.center = [127.8, 36.3] | .zoom = 7 | .sources.openmaptiles.url = "mbtiles://{v3}" | .glyphs = "{fontstack}/{range}.pbf"' /tmp/osm-bright.json > /data/styles/osm-bright.json
+        if [ ! -f "/data/fonts/Noto Sans Regular/0-255.pbf" ]; then
+          wget -qO /tmp/noto-open-sans.zip https://github.com/openmaptiles/fonts/releases/download/v2.0/noto-open-sans.zip
+          unzip -qo /tmp/noto-open-sans.zip -d /data/fonts
+        fi
+        printf '%s' '{"options":{"paths":{"root":"/data","fonts":"fonts","sprites":"sprites","styles":"styles","mbtiles":"."},"frontPage":"index.html","serveAllFonts":true,"staticAttributionText":"© OpenStreetMap contributors · OpenMapTiles"},"styles":{"osm-bright":{"style":"osm-bright.json","serve_rendered":true,"serve_data":true}},"data":{"v3":{"mbtiles":"korea.mbtiles"}}}' > /data/config.json
+        printf '%s' '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>대한민국 지도</title><meta http-equiv="refresh" content="0;url=/styles/osm-bright/#7/36.3/127.8"><script>location.replace("/styles/osm-bright/#7/36.3/127.8")</script></head><body><a href="/styles/osm-bright/#7/36.3/127.8">대한민국 지도 열기</a></body></html>' > /data/index.html
+    volumes:
+      - type: volume
+        source: korea-map-data
+        target: /data
+    restart: "no"
+
+  tileserver-gl:
+    image: maptiler/tileserver-gl:latest
+    command:
+      - --config
+      - /data/config.json
+      - --port
+      - "8080"
+      - --public_url
+      - https://map.airquiz.kr
+    depends_on:
+      korea-tile-builder:
+        condition: service_completed_successfully
+      map-style-init:
+        condition: service_completed_successfully
+    volumes:
+      - type: volume
+        source: korea-map-data
+        target: /data
+        read_only: true
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - /usr/src/app/src/healthcheck.js
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  korea-map-data:

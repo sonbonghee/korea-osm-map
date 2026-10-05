@@ -1,0 +1,6 @@
+*.mbtiles
+*.osm.pbf
+.env
+.idea/
+.vscode/
+Thumbs.db
